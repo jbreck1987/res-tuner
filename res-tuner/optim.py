@@ -7,6 +7,8 @@ from functools import partial
 import matplotlib.pyplot as plt
 from typing import Callable
 
+PP = 4 # Precsion for decimal point printing
+
 class OptimizationError(BaseException):
     """
     General optimization error for this object.
@@ -53,7 +55,7 @@ class ResOptimizer:
             self.fit_sols1,
             **kwargs
         )
-        print("Finished interpolation of first fit parameter space!")
+        print("Finished interpolation of first fit parameter space!\n")
         
         print("Starting interpolation of the second fit parameter space...")
         self.f2_objective = CloughTocher2DInterpolator(
@@ -61,7 +63,7 @@ class ResOptimizer:
             self.fit_sols2,
             **kwargs
         )
-        print("Finished interpolation of second fit parameter space!")
+        print("Finished interpolation of second fit parameter space!\n")
 
         if plot:
             self._plot_2d(
@@ -80,16 +82,16 @@ class ResOptimizer:
         that has a fit value pair close to the target). WILL RAISE IF OPTIMIZATION IS UNSUCCESFUL.
         """
         if self.bounds is None:
-            print("Finding input space bounds for constrained optimization...")
+            print("Finding input space bounds to constrain optimization...")
             self.bounds = self._find_bounds()
-            print(f"Bounds found: {self.bounds}")
+            print(f"Bounds found: x1: {self.bounds[0]}, x2: {self.bounds[1]}\n")
 
         if guess is None:
             print("Finding best initial guess from input space...")
             guess = self._find_guess(target=target)
-            print(f"Found guess: ({guess[0], guess[1]})!")
+            print(f"Found guess: ({guess[0]:.{PP}f}, {guess[1]:.{PP}f})!\n")
 
-        print(f"Starting optimization for target: ({target[0], target[1]})...")
+        print(f"Starting optimization for target: ({target[0]:.{PP}f}, {target[1]:.{PP}f})...")
         opt_result = minimize(
             fun = partial(self._multi_objective_dist_function, y1=target[0], y2=target[1]),
             x0 = guess,
@@ -98,12 +100,12 @@ class ResOptimizer:
         )
 
         if opt_result.success:
-            print(f"Optimization successful for target({target[0], target[1]}):")
-            print(f"\tInterp soln: ({self.f1_objective(opt_result.x), self.f2_objective(opt_result.x)})")
-            print(f"\tInput params: ({opt_result.x[0], opt_result.x[1]})")
+            print(f"Optimization successful for target({target[0]:.{PP}f}, {target[1]:.{PP}f})")
+            print(f"\tInterp soln: ({self.f1_objective(opt_result.x)[0]:.{PP}f}, {self.f2_objective(opt_result.x)[0]:.{PP}})")
+            print(f"\tInput params: ({opt_result.x[0]:.{PP}f}, {opt_result.x[1]:.{PP}f})\n\n")
             return (target, opt_result.x)
         else:
-            err_message = f"Optimization for target ({target[0], target[1]}) failed"
+            err_message = f"Optimization for target ({target[0]:.{PP}f}, {target[1]:.{PP}f}) failed"
             if show_message:
                 raise OptimizationError(err_message + f': {opt_result.message}')
             else:
@@ -138,7 +140,9 @@ class ResOptimizer:
         
         # Find bounds to fix the plot ranges
         if self.bounds is None:
+            print("Finding input space bounds for setting plot limits..")
             self.bounds = self._find_bounds()
+            print(f"Bounds found: x1: {self.bounds[0]}, x2: {self.bounds[1]}\n\n")
         
         # Create input arrays for objective functions
         x1 = np.linspace(self.bounds[0, 0], self.bounds[0, 1], grid_side)
