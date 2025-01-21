@@ -1,3 +1,4 @@
+from decimal import Decimal
 import numpy as np
 from numpy.typing import NDArray
 from scipy.interpolate import CloughTocher2DInterpolator
@@ -6,8 +7,58 @@ from scipy.spatial.distance import cdist
 from functools import partial
 import matplotlib.pyplot as plt
 from typing import Callable
+import parse
 
 PP = 4 # Precsion for decimal point printing
+
+class SimFilenameParser:
+    """
+    Allows for embedding metadata (E.g tunable values) into the filename
+    of a simulation file.
+    """
+    def __init__(
+        self, prefix: str, param1_delim: str = 'cap',
+        param2_delim: str = 'coup', replace_delim: str = '__',
+        file_type: str | None = 'ts', prec: int = 5
+    ):
+        self.prefix = prefix
+        self.p1_delim = param1_delim
+        self.p2_delim = param2_delim
+        self.replace_delim = replace_delim
+        self.ftype = file_type
+        self.prec = Decimal(f'1e-{prec}')
+        if self.ftype is None:
+            self.pattern = f'{prefix}_{param1_delim}_{{param_1:f}}_{param2_delim}_{{param_2:f}}'
+        else:
+            self.pattern = f'{prefix}_{param1_delim}_{{param_1:f}}_{param2_delim}_{{param_2:f}}.{self.ftype}'
+
+
+    def build_filename(self, param_1: float, param_2: float) -> str:
+        """
+        Builds a filename for simulation files that embeds metadata. Will replace '.'
+        with `replace_delim`. Currently only supports two parameters.
+        """
+        param_1 = Decimal(param_1).quantize(self.prec)
+        param_2 = Decimal(param_2).quantize(self.prec)
+        interim = f'{self.prefix}_{self.p1_delim}_{param_1}_{self.p2_delim}_{param_2}'
+        interim = interim.replace('.', self.replace_delim)
+    
+        if interim is None:
+            return interim
+        return f'{interim}.{self.ftype}'
+
+    def parse_filename(self, fname: str) -> tuple[float, float] | None:
+        """
+        Parses a filename generated using this instance of the
+        parser. Will return None if pattern is not matched.
+        """
+        # First need to get '.' back in the correct places
+        fname = fname.replace(self.replace_delim, '.')
+        result = parse.parse(self.pattern, fname)
+        if result is None:
+            return result
+        return tuple([v for v in result.named.values()])
+
 
 class OptimizationError(BaseException):
     """
