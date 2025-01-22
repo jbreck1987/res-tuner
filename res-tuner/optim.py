@@ -235,7 +235,7 @@ class ResOptimizer:
         )
 
         if opt_result.success:
-            print(f"Optimization successful for target({target[0]:.{PP}f}, {target[1]:.{PP}f})")
+            print(f"Optimization successful for target: ({target[0]:.{PP}f}, {target[1]:.{PP}f})")
             print(f"\tInterp soln: ({self.f1_objective(opt_result.x)[0]:.{PP}f}, {self.f2_objective(opt_result.x)[0]:.{PP}})")
             print(f"\tInput params: ({opt_result.x[0]:.{PP}f}, {opt_result.x[1]:.{PP}f})\n\n")
             return (target, opt_result.x)
@@ -250,14 +250,14 @@ class ResOptimizer:
     def _multi_objective_dist_function(self, xs: NDArray, y1: float, y2: float) -> float:
         """
         The multi-objective function that will be optimized over. This
-        function minimizes the SQUARE of the Euclidean distance between the target fit value
+        function minimizes the Euclidean distance between the target fit value
         pair and a point on the Pareto optimization front. Raises if interpolation
         has not been performed.
         """
         if self.f1_objective is None or self.f2_objective is None:
             raise OptimizationError("Interpolation is incomplete. Run `interpolate()` before optimizing.")
         
-        return np.square(np.square(self.f1_objective((xs[0], xs[1])) - y1) + np.square(self.f2_objective((xs[0], xs[1])) - y2))
+        return np.sqrt(np.square(self.f1_objective((xs[0], xs[1])) - y1) + np.square(self.f2_objective((xs[0], xs[1])) - y2))
         
     def _plot_2d(
             self, x1_label: str, x2_label: str,
@@ -319,7 +319,8 @@ class ResOptimizer:
         """
         Finds an initial optmization guess from the given discrete output space. This isn't
         guaranteed to be optimal since the output space can be complex. Uses Euclidean
-        distance between target and a known point from the discrete output space.
+        distance between target and a known point from the discrete output space as objective
+        function.
         """
         target = np.array([target, target]) # necessary for the matrix-vec equation for euclidean distance
         ds = cdist(self.merged_fit_sols, target, metric='euclidean')
