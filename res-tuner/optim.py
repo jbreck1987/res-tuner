@@ -6,8 +6,10 @@ from scipy.optimize import minimize
 from scipy.spatial.distance import cdist
 from functools import partial
 import matplotlib.pyplot as plt
-from typing import Callable
+from typing import Callable, Iterable
 import parse
+import loopfit as lf
+from pathlib import Path
 
 PP = 4 # Precsion for decimal point printing
 
@@ -59,6 +61,88 @@ class SimFilenameParser:
             return result
         return tuple([v for v in result.named.values()])
 
+class FitIQ:
+    """
+    Encapulates the logic for retrieving results from a simulation,
+    performing fit on the result, extracting the target value(s).
+    Expects a path to the simulation results along with any tunable values
+    to be associated with it.
+
+    E.g. (
+            ("path_to_my_touchstone_file_1", (0.87, 1)),
+            ("path_to_my_touchstone_file_2", (0.90, 1)),
+            ...,
+            ("path_to_my_touchstone_file_n, (1, 1))
+         )
+    """
+    def __init__(
+        self, ts_objects: Iterable[tuple[Path | str, tuple[float]]]
+    ) -> None: 
+        self.ts_objects = ts_objects
+        self._fit_params = ("f0", "qc", "qi", "a", "xa", "q0")
+        self.res = None
+
+    def fit(
+        self,
+        summary_on_fail: bool = False,
+        phase0_fix: float = 0,
+        phase1_fix: float = 0,
+        fit_params: str | tuple[str] = ('f0', 'qc')
+    ) -> tuple[tuple[float, float], tuple[float, float]] | None: # E.g. ((cap_fill, coupler_fill), (f0, qc))
+        """
+        Loads the touchstone files and performes the fit on each
+        """
+        # Check given fit_param is supported
+        if isinstance(fit_params, str):
+            fit_params = (fit_params,)
+        for param in fit_params:
+            if param not in self._fit_params:
+                raise ValueError(f'{param} is not supported. Supported options are {self._fit_params}.')
+        
+        # "Pathify" if path is not a Path
+        for path, geom_var in self.ts_objects:
+            if isinstance(path, str):
+                path = Path(path)
+            if path.suffix != ".ts":
+                raise RuntimeError("Input touchstone files only.")
+            
+            # Extract the data from the touchstone file for fitting
+            try:
+                f, i, q = lf.load_touchstone(path)
+            except ValueError as e:
+                print(f'{e}. Moving to next item.')
+                continue
+
+            # Create a guess for the fit. Fixing phase pre-factors
+            guess = lf.guess(f, i ,q, phase0=phase0_fix, phase1=phase1_fix)
+
+            # Perform fit. Notify user on failure to converge and continue
+            # to next file.
+            try:
+                result = lf.fit(f, i, q, **guess)
+                if not result['success']:
+                    print(f'Fit did not converge for {path.name}.')
+                    print('Moving to next item.')
+                    if summary_on_fail:
+                        print(f'Solver summary below:')
+                        print(result['summary'])
+                    continue
+                if self.res is None:
+                    self.res = []
+            except Exception as e:
+                print(f'Fit Exception: {e}.')
+                print('Moving to next item.')
+                continue
+
+            # Add results to temp storage
+            param_strs = [f'{p} = {result[p]}' for p in fit_params]
+            print(f'Result for {path.name}: geometry parameter(s) {geom_var}): {", ".join(param_strs)}')
+            self.res.append(((geom_var, tuple([result[p] for p in fit_params]))))
+        
+        # The list holding return values will stay None until successful fit is found
+        if self.res is None:
+            return None
+        return tuple(self.res)
 
 class OptimizationError(BaseException):
     """
