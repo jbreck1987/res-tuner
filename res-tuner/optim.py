@@ -2,7 +2,7 @@ from decimal import Decimal
 import numpy as np
 from numpy.typing import NDArray
 from scipy.interpolate import CloughTocher2DInterpolator
-from scipy.optimize import minimize
+from scipy.optimize import minimize, OptimizeResult
 from scipy.spatial.distance import cdist
 from functools import partial
 import matplotlib.pyplot as plt
@@ -205,6 +205,26 @@ class ResOptimizer:
                 x1_label=self.input1_label, x2_label=self.input2_label,
                 z_label1=self.fit1_label, z_label2=self.fit2_label
             )
+    def _optimize(self, guess: NDArray, target: NDArray, show_message) -> OptimizeResult:
+        """
+        Handles low-level optimization logic. RAISES ON NON-CONVERGENCE.
+        """
+        opt_result = minimize(
+            fun = partial(self._multi_objective_dist_function, y1=target[0], y2=target[1]),
+            x0 = guess,
+            method = 'L-BFGS-B',
+            bounds = self.bounds
+        )
+        if opt_result.success:
+            return opt_result
+
+        else:
+            err_message = f"Optimization for target ({target[0]:.{PP}f}, {target[1]:.{PP}f}) failed"
+            if show_message:
+                raise OptimizationError(err_message + f': {opt_result.message}')
+            else:
+                raise OptimizationError(err_message)
+
 
     def optimize(
         self, target: NDArray, guess: NDArray | None = None,
@@ -221,30 +241,36 @@ class ResOptimizer:
             self.bounds = self._find_bounds()
             print(f"Bounds found: x1: {self.bounds[0]}, x2: {self.bounds[1]}\n")
 
-        if guess is None:
-            print("Finding best initial guess from input space...")
-            guess = self._find_guess(target=target)
-            print(f"Found guess: ({guess[0]:.{PP}f}, {guess[1]:.{PP}f})!\n")
-
         print(f"Starting optimization for target: ({target[0]:.{PP}f}, {target[1]:.{PP}f})...")
-        opt_result = minimize(
-            fun = partial(self._multi_objective_dist_function, y1=target[0], y2=target[1]),
-            x0 = guess,
-            method = 'L-BFGS-B',
-            bounds = self.bounds
-        )
+        if guess is None:
+            print("Finding best initial guess(s) from input space...")
+            guess = self._find_guess(target=target)
 
-        if opt_result.success:
-            print(f"Optimization successful for target: ({target[0]:.{PP}f}, {target[1]:.{PP}f})")
-            print(f"\tInterp soln: ({self.f1_objective(opt_result.x)[0]:.{PP}f}, {self.f2_objective(opt_result.x)[0]:.{PP}})")
-            print(f"\tInput params: ({opt_result.x[0]:.{PP}f}, {opt_result.x[1]:.{PP}f})\n\n")
-            return (target, opt_result.x)
-        else:
-            err_message = f"Optimization for target ({target[0]:.{PP}f}, {target[1]:.{PP}f}) failed"
-            if show_message:
-                raise OptimizationError(err_message + f': {opt_result.message}')
+            # If degenerate guesses for a given target, optimize using each guess
+            # and choose the one with smallest distance
+            if guess.shape[0] > 1:
+                print(f'Found multiple degenerate guesses.')
+                dlist = []
+                for g in guess:
+                    print(f'\tOptimizing with guess: ({g[0]:.{PP}f}, {g[1]:.{PP}f})...')
+                    opt_res = self._optimize(guess=g, target=target, show_message=show_message)
+                    dlist.append((opt_res.fun, opt_res.x, g))
+                    print(f'\tOptimization successful for guess: ({g[0]:.{PP}f}, {g[1]:.{PP}f}).')
+                    print(f'\tDistance: {opt_res.fun}\n')
+                
+                # Sort on distance value
+                dlist.sort(key=lambda x: x[0])
+                best_guess = dlist[0]
+                print(f'Lowest distance {best_guess[0]:.{PP}f} with guess ({best_guess[2][0]:.{PP}f}, {best_guess[2][1]}:.{PP}f)')
             else:
-                raise OptimizationError(err_message)
+                print(f"Found guess: ({guess[0, 0]:.{PP}f}, {guess[0, 1]:.{PP}f})\n")
+                opt_res = self._optimize(guess=guess.flatten(), target=target, show_message=show_message)
+                best_guess = (opt_res.fun, opt_res.x, guess)
+
+            print(f"Optimization successful for target: ({target[0]:.{PP}f}, {target[1]:.{PP}f})")
+            print(f"\tInterp soln: ({self.f1_objective(best_guess[1])[0]:.{PP}f}, {self.f2_objective(best_guess[1])[0]:.{PP}})")
+            print(f"\tInput params: ({best_guess[1][0]:.{PP}f}, {best_guess[1][1]:.{PP}f})\n\n")
+            return (target, best_guess[1])
               
 
     def _multi_objective_dist_function(self, xs: NDArray, y1: float, y2: float) -> float:
@@ -257,7 +283,7 @@ class ResOptimizer:
         if self.f1_objective is None or self.f2_objective is None:
             raise OptimizationError("Interpolation is incomplete. Run `interpolate()` before optimizing.")
         
-        return np.sqrt(np.square(self.f1_objective((xs[0], xs[1])) - y1) + np.square(self.f2_objective((xs[0], xs[1])) - y2))
+        return np.sqrt(10 * np.square(self.f1_objective((xs[0], xs[1])) - y1) + np.square(self.f2_objective((xs[0], xs[1])) - y2))
         
     def _plot_2d(
             self, x1_label: str, x2_label: str,
@@ -323,7 +349,11 @@ class ResOptimizer:
         function.
         """
         target = np.array([target, target]) # necessary for the matrix-vec equation for euclidean distance
-        ds = cdist(self.merged_fit_sols, target, metric='euclidean')
-        return self.merged_fit_sols[np.argmin(ds[:, 0])]
+        dists = cdist(self.merged_fit_sols, target, metric='euclidean')[:, 0] # Cols are duplicates, only need one.
+        min_dist = dists.min()
+        min_indices = np.where(dists == min_dist)
+
+        # Return all possible "best guesses" using Euclidean distance as FoM
+        return self.merged_fit_sols[min_indices]
     
         
