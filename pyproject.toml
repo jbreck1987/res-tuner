@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools >= 61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+dynamic = ["version"]
+
+name = "res-tuner"
+description = "Optimization package for f0/qc"
+readme = "README.md"
+
+authors = [
+  {name = "Josh Breckenridge"},
+  {name = "Mazin Lab contributors"}
+]
+maintainers = [
+  {name = "Josh Breckenridge", email = "breckeja@ucsb.edu"}
+]
+
+requires-python = ">=3.10"
+dependencies = [
+  "numpy",
+  "scipy",
+  "parse",
+  "loopfit==0.6",
+  "matplotlib"
+]
+
+[tool.setuptools]
+packages = ["res_tuner"]
