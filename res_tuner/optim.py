@@ -205,12 +205,13 @@ class ResOptimizer:
                 x1_label=self.input1_label, x2_label=self.input2_label,
                 z_label1=self.fit1_label, z_label2=self.fit2_label
             )
-    def _optimize(self, guess: NDArray, target: NDArray, show_message) -> OptimizeResult:
+    def _optimize(self, guess: NDArray, target: NDArray, show_message: bool = False, **kwargs) -> OptimizeResult:
         """
-        Handles low-level optimization logic. RAISES ON NON-CONVERGENCE.
+        Handles low-level optimization logic. RAISES ON NON-CONVERGENCE. kwargs are passed
+        the multi-objective optimization function.
         """
         opt_result = minimize(
-            fun = partial(self._multi_objective_dist_function, y1=target[0], y2=target[1]),
+            fun = partial(self._multi_objective_dist_function, y1=target[0], y2=target[1], **kwargs),
             x0 = guess,
             method = 'L-BFGS-B',
             bounds = self.bounds
@@ -227,8 +228,8 @@ class ResOptimizer:
 
 
     def optimize(
-        self, target: NDArray, guess: NDArray | None = None,
-        show_message: bool = False
+        self, target: NDArray, guess: NDArray | None = None, x1_weight: float = 10.0,
+        x2_weight: float = 1.0, show_message: bool = False
     ) -> tuple[NDArray, NDArray]:
         """
         Performs constrained, multi-objective optimization for a given target.
@@ -253,7 +254,11 @@ class ResOptimizer:
                 dlist = []
                 for g in guess:
                     print(f'\tOptimizing with guess: ({g[0]:.{PP}f}, {g[1]:.{PP}f})...')
-                    opt_res = self._optimize(guess=g, target=target, show_message=show_message)
+                    opt_res = self._optimize(
+                        guess=g, target=target,
+                        show_message=show_message,
+                        x1_weight=x1_weight, x2_weight=x2_weight
+                        )
                     dlist.append((opt_res.fun, opt_res.x, g))
                     print(f'\tOptimization successful for guess: ({g[0]:.{PP}f}, {g[1]:.{PP}f}).')
                     print(f'\tDistance: {opt_res.fun}\n')
@@ -264,7 +269,11 @@ class ResOptimizer:
                 print(f'Lowest distance {best_guess[0]:.{PP}f} with guess ({best_guess[2][0]:.{PP}f}, {best_guess[2][1]}:.{PP}f)')
             else:
                 print(f"Found guess: ({guess[0, 0]:.{PP}f}, {guess[0, 1]:.{PP}f})\n")
-                opt_res = self._optimize(guess=guess.flatten(), target=target, show_message=show_message)
+                opt_res = self._optimize(
+                    guess=guess.flatten(), target=target,
+                    show_message=show_message,
+                    x1_weight=x1_weight, x2_weight=x2_weight
+                )
                 best_guess = (opt_res.fun, opt_res.x, guess)
 
             print(f"Optimization successful for target: ({target[0]:.{PP}f}, {target[1]:.{PP}f})")
@@ -273,7 +282,10 @@ class ResOptimizer:
             return (target, best_guess[1])
               
 
-    def _multi_objective_dist_function(self, xs: NDArray, y1: float, y2: float) -> float:
+    def _multi_objective_dist_function(
+            self, xs: NDArray, y1: float, y2: float,
+            x1_weight: float, x2_weight: float
+    ) -> float:
         """
         The multi-objective function that will be optimized over. This
         function minimizes the Euclidean distance between the target fit value
@@ -283,7 +295,10 @@ class ResOptimizer:
         if self.f1_objective is None or self.f2_objective is None:
             raise OptimizationError("Interpolation is incomplete. Run `interpolate()` before optimizing.")
         
-        return np.sqrt(10 * np.square(self.f1_objective((xs[0], xs[1])) - y1) + np.square(self.f2_objective((xs[0], xs[1])) - y2))
+        return np.sqrt(
+            x1_weight * np.square(self.f1_objective((xs[0], xs[1])) - y1) +
+            x2_weight * np.square(self.f2_objective((xs[0], xs[1])) - y2)
+        )
         
     def _plot_2d(
             self, x1_label: str, x2_label: str,
