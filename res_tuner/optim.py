@@ -13,6 +13,10 @@ from pathlib import Path
 
 PP = 4 # Precsion for decimal point printing
 
+def ffmt(num, precision=PP):
+    return f"{num:.{precision}f}" if isinstance(num, float) else str(num) or isinstance(num, np.floating)
+
+
 class SimFilenameParser:
     """
     Allows for embedding metadata (E.g tunable values) into the filename
@@ -267,15 +271,19 @@ class ResOptimizer:
         """
         Performs constrained, multi-objective optimization for a given target.
         Returns ([target_fit_val1, target_fit_val2], [optimized_tunable_val1, optimized_tunable_val2]).
-        If guess is None, will find an appropriate guess from the input space (I.E. A coordinate
-        that has a fit value pair close to the target). WILL RAISE IF OPTIMIZATION IS UNSUCCESFUL.
+        If guess is None, will find an appropriate guess(es) from the input space (I.E. Coordinate(s)
+        that have a fit value pair close to the target). WILL RAISE IF OPTIMIZATION IS UNSUCCESFUL.
         """
         if self.bounds is None:
             print("Finding input space bounds to constrain optimization...")
             self.bounds = self._find_bounds()
-            print(f"Bounds found: x1: {self.bounds[0]}, x2: {self.bounds[1]}\n")
+            print(
+                f'Bounds found: '
+                f'x1: ({ffmt(self.bounds[0][0])}, {ffmt(self.bounds[0][1])}), '
+                f'x2: ({ffmt(self.bounds[1][0])}, {ffmt(self.bounds[1][1])}) '
+            )
 
-        print(f"Starting optimization for target: ({target[0] * self.fit1_norm:.{PP}f}, {target[1] * self.fit2_norm:.{PP}f})...")
+        print(f'Starting optimization for target: ({ffmt(target[0])}, {ffmt(target[1])})...')
         if guess is None:
             print("Finding best initial guess(s) from input space...")
             guess = self._find_guess(target=target)
@@ -286,30 +294,39 @@ class ResOptimizer:
                 print(f'Found multiple degenerate guesses.')
                 dlist = []
                 for g in guess:
-                    print(f'\tOptimizing with guess: ({g[0] * self.fit1_norm:.{PP}f}, {g[1] * self.fit2_norm:.{PP}f})...')
+                    print(f'\tOptimizing with guess: ({ffmt(g[0] * self.fit1_norm)}, {ffmt(g[1] * self.fit2_norm)})...')
                     opt_res = self._optimize(
                         guess=g, target=target, f0_tol=f0_tol,
                         show_message=show_message,
                     )
                     dlist.append((opt_res.fun, opt_res.x, g))
-                    print(f'\tOptimization successful for guess: ({g[0]:.{PP}f}, {g[1]:.{PP}f}).')
+                    print(f'\tOptimization successful for guess: ({ffmt(g[0])}, {ffmt(g[1])}).')
                     print(f'\tDistance: {opt_res.fun}\n')
                 
                 # Sort on distance value
                 dlist.sort(key=lambda x: x[0])
                 best_guess = dlist[0]
-                print(f'Lowest distance {best_guess[0]:.{PP}f} with guess: ({best_guess[2][0] * self.fit1_norm:.{PP}f}, {best_guess[2][1] * self.fit2_norm}:.{PP}f)')
+                print(
+                    f'Lowest distance {ffmt(best_guess[0])} with guess: '
+                    f'({ffmt(best_guess[2][0] * self.fit1_norm)}, {ffmt(best_guess[2][1] * self.fit2_norm)})'
+                )
             else:
-                print(f"Found guess: ({guess[0, 0] * self.fit1_norm:.{PP}f}, {guess[0, 1] * self.fit2_norm:.{PP}f})\n")
+                print(f"Found guess: ({ffmt(guess[0, 0] * self.fit1_norm)}, {ffmt(guess[0, 1] * self.fit2_norm)})\n")
                 opt_res = self._optimize(
                     guess=guess.flatten(), target=target, f0_tol=f0_tol,
                     show_message=show_message,
                 )
                 best_guess = (opt_res.fun, opt_res.x, guess)
 
-            print(f"Optimization successful for target: ({target[0] * self.fit1_norm:.{PP}f}, {target[1] * self.fit2_norm:.{PP}f})")
-            print(f"\tInterp soln: ({self.f1_objective(best_guess[1])[0] * self.fit1_norm:.{PP}f}, {self.f2_objective(best_guess[1])[0] * self.fit2_norm:.{PP}})")
-            print(f"\tInput params: ({best_guess[1][0]:.{PP}f}, {best_guess[1][1]:.{PP}f})\n\n")
+            print(
+                f'Optimization successful for target: '
+                f'({ffmt(target[0] * self.fit1_norm)}, {ffmt(target[1] * self.fit2_norm)})'
+            )
+            print(
+                f'\tInterp soln: ({ffmt(self.f1_objective(best_guess[1])[0] * self.fit1_norm)}, '
+                f'{ffmt(self.f2_objective(best_guess[1])[0] * self.fit2_norm)})'
+            )
+            print(f"\tInput params: ({ffmt(best_guess[1][0])}, {ffmt(best_guess[1][1])})\n\n")
             return tuple(target * np.array((self.fit1_norm, self.fit2_norm))), tuple(best_guess[1])
 
     def _plot_2d(
@@ -330,7 +347,11 @@ class ResOptimizer:
         if self.bounds is None:
             print("Finding input space bounds for setting plot limits..")
             self.bounds = self._find_bounds()
-            print(f"Bounds found: x1: {self.bounds[0]}, x2: {self.bounds[1]}\n\n")
+            print(
+                f'Bounds found: '
+                f'x1: ({ffmt(self.bounds[0][0])}, {ffmt(self.bounds[0][1])}), '
+                f'x2: ({ffmt(self.bounds[1][0])}, {ffmt(self.bounds[1][1])}) '
+            )
         
         # Create input arrays for objective functions
         x1 = np.linspace(self.bounds[0, 0], self.bounds[0, 1], grid_side)
@@ -382,5 +403,3 @@ class ResOptimizer:
 
         # Return all possible "best guesses" using Euclidean distance as FoM
         return self.merged_fit_sols[min_indices]
-    
-        
