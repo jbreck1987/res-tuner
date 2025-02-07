@@ -4,17 +4,40 @@ from numpy.typing import NDArray
 from scipy.interpolate import CloughTocher2DInterpolator
 from scipy.optimize import minimize, OptimizeResult
 from scipy.spatial.distance import cdist
-from functools import partial
 import matplotlib.pyplot as plt
 from typing import Callable, Iterable
 import parse
 import loopfit as lf
 from pathlib import Path
+from dataclasses import dataclass
 
 PP = 4 # Precsion for decimal point printing
 
 def ffmt(num, precision=PP):
     return f"{num:.{precision}f}" if isinstance(num, float) else str(num) or isinstance(num, np.floating)
+
+@dataclass
+class ResOptResult:
+    """
+    Simple class to hold the results of an optimization.
+
+    tunables: NDArray of the predicted tunable values to give the target.
+    target: NDArray of the given target values.
+    """
+    tunables: NDArray | None = None
+    target: NDArray | None = None
+
+@dataclass
+class IQResult:
+    """
+    Simple class to hold the results of an IQ loop fit.
+    
+    @params
+    -tunables: NDArray of the tunable values used in the simulation.
+    -fit_values: dict with the fit results of the given parameter
+    """
+    tunables: NDArray | None = None
+    fit_values: dict | None = None
 
 
 class SimFilenameParser:
@@ -92,7 +115,7 @@ class FitIQ:
         phase0_fix: float = 0,
         phase1_fix: float = 0,
         fit_params: str | tuple[str] = ('f0', 'qc')
-    ) -> tuple[tuple[float, float], tuple[float, float]] | None: # E.g. ((cap_fill, coupler_fill), (f0, qc))
+    ) -> IQResult | None:
         """
         Loads the touchstone files and performes the fit on each
         """
@@ -141,7 +164,12 @@ class FitIQ:
             # Add results to temp storage
             param_strs = [f'{p} = {result[p]}' for p in fit_params]
             print(f'Result for {path.name}: geometry parameter(s) {geom_var}): {", ".join(param_strs)}')
-            self.res.append(((geom_var, tuple([result[p] for p in fit_params]))))
+            self.res.append(
+                IQResult(
+                    tunables=np.array(geom_var, dtype=np.float64),
+                    fit_values={p: result[p] for p in fit_params}
+                )
+            )
         
         # The list holding return values will stay None until successful fit is found
         if self.res is None:
@@ -226,24 +254,27 @@ class ResOptimizer:
 
     def _optimize(
             self, guess: NDArray, target: NDArray, f0_tol: float, show_message: bool = False
-        ) -> OptimizeResult:
+    ) -> OptimizeResult:
         """
         Handles low-level optimization logic. RAISES ON NON-CONVERGENCE. kwargs are passed
         the multi-objective optimization function.
         """
         # Fix target and f0 tolerance if using normalization
         if self.norm:
-            target[0] = target[0] / self.fit1_norm
-            target[1] = target[1] / self.fit2_norm
-            f0_tol = f0_tol / self.fit1_norm
+            norm_target = np.array(
+                (target[0] / self.fit1_norm, target[1] /self.fit2_norm)
+            )
+            norm_f0_tol = f0_tol / self.fit1_norm
         
-        # Define the objective function for Qc
-        qc_opt_fn = lambda xs: np.abs(self.f2_objective(*xs) - target[1])
+        # Define the objective function for Qc. Using absolute error.
+        qc_opt_fn = lambda xs: np.abs(self.f2_objective(*xs) - norm_target[1])
 
         # Define the constraint function on resonant frequency and constraint object
-        # in format necessary for the optimizer
-        f0_constraint_fn = lambda xs: f0_tol - np.abs(self.f1_objective(*xs) - target[0])
-        constraints = {'type': 'ineq', 'fun': f0_constraint_fn}
+        # in format necessary for the optimizer. The 'ineq' is telling the optimizer
+        # that the constraint is of the form f(x, y) >= 0. Using this, abs(f0 - target) <= f0_tol
+        # (what we actually want) implies f0_tol - abs(f0 - target) >= 0 (form for the optimizer).
+        f0_constraint_fn = lambda xs: norm_f0_tol - np.abs(self.f1_objective(*xs) - norm_target[0])
+        constraints = {'type': 'ineq', 'fun': f0_constraint_fn} 
 
         opt_result = minimize(
             fun=qc_opt_fn,
@@ -251,13 +282,13 @@ class ResOptimizer:
             method='SLSQP',
             constraints=constraints,
             bounds=self.bounds,
-            options={'maxiter': 10000}
+            options={'maxiter': 20000}
         )
         if opt_result.success:
             return opt_result
 
         else:
-            err_message = f"Optimization for target ({target[0] * self.fit1_norm:.{PP}f}, {target[1] * self.fit2_norm:.{PP}f}) failed"
+            err_message = f"Optimization for target ({ffmt(target[0])}, {ffmt(target[1])}) failed"
             if show_message:
                 raise OptimizationError(err_message + f': {opt_result.message}')
             else:
@@ -267,7 +298,7 @@ class ResOptimizer:
     def optimize(
         self, target: NDArray, f0_tol: float, guess: NDArray | None = None,
         show_message: bool = False
-    ) -> tuple[NDArray, NDArray]:
+    ) -> ResOptResult:
         """
         Performs constrained, multi-objective optimization for a given target.
         Returns ([target_fit_val1, target_fit_val2], [optimized_tunable_val1, optimized_tunable_val2]).
@@ -317,17 +348,17 @@ class ResOptimizer:
                     show_message=show_message,
                 )
                 best_guess = (opt_res.fun, opt_res.x, guess)
-
-            print(
-                f'Optimization successful for target: '
-                f'({ffmt(target[0] * self.fit1_norm)}, {ffmt(target[1] * self.fit2_norm)})'
-            )
+            print(f'Optimization successful for target: ({ffmt(target[0])}, {ffmt(target[1])})')
             print(
                 f'\tInterp soln: ({ffmt(self.f1_objective(best_guess[1])[0] * self.fit1_norm)}, '
                 f'{ffmt(self.f2_objective(best_guess[1])[0] * self.fit2_norm)})'
             )
             print(f"\tInput params: ({ffmt(best_guess[1][0])}, {ffmt(best_guess[1][1])})\n\n")
-            return tuple(target * np.array((self.fit1_norm, self.fit2_norm))), tuple(best_guess[1])
+
+            return ResOptResult(
+                target = target * np.array((self.fit1_norm, self.fit2_norm)),
+                tunables = best_guess[1]
+            )
 
     def _plot_2d(
             self, x1_label: str, x2_label: str,
@@ -396,8 +427,13 @@ class ResOptimizer:
         distance between target and a known point from the discrete output space as objective
         function.
         """
-        target = np.array([target, target]) # necessary for the matrix-vec equation for euclidean distance
-        dists = cdist(self.merged_fit_sols, target, metric='euclidean')[:, 0] # Cols are duplicates, only need one.
+        # Fix target for normalization
+        norm_target = np.array(
+            (target[0] / self.fit1_norm, target[1] /self.fit2_norm)
+        )
+
+        norm_target = np.array([norm_target, norm_target]) # necessary for the matrix-vec equation for euclidean distance
+        dists = cdist(self.merged_fit_sols, norm_target, metric='euclidean')[:, 0] # Cols are duplicates, only need one.
         min_dist = dists.min()
         min_indices = np.where(dists == min_dist)
 
