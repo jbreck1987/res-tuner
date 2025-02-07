@@ -161,6 +161,7 @@ class ResOptimizer:
     def __init__(
             self, input_coords: NDArray, # n_points x 2, coordinates in the grid; E.g. [[cap_fill0, coup_fill0], [cap_fill0, coup_fill1], ...]
             fit_sols1: NDArray, fit_sols2: NDArray, # n_points x 1 for each, should be sols for the associated coord for each fit param
+            normalize: bool = True, 
             input_param1_label: str = 'cap_fill',
             input_param2_label: str = 'coupler_fill',
             fit_param1_label: str = 'f0',
@@ -170,13 +171,23 @@ class ResOptimizer:
         self.f2_objective: Callable[..., float] | None = None
         self.fit_sols1: NDArray = fit_sols1
         self.fit_sols2: NDArray = fit_sols2
+        self.norm = normalize
+        self.fit1_norm = 1.0
+        self.fit2_norm = 1.0
+        if self.norm:
+            self.fit1_norm = fit_sols1.max()
+            self.fit2_norm = fit_sols2.max()
+            self.fit_sols1 = self.fit_sols1 / self.fit1_norm
+            self.fit_sols2 = self.fit_sols2 / self.fit2_norm
+        
         self.coords: NDArray = input_coords
         self.bounds: NDArray | None = None
         self.input1_label = input_param1_label
         self.input2_label = input_param2_label
         self.fit1_label = fit_param1_label
         self.fit2_label = fit_param2_label
-        self.merged_fit_sols = np.array(list(zip(fit_sols1, fit_sols2)))
+        self.merged_fit_sols = np.array(list(zip(self.fit_sols1, self.fit_sols2)))
+
     
     def interpolate(self, plot: bool = False, **kwargs) -> None:
         """
@@ -200,27 +211,49 @@ class ResOptimizer:
         )
         print("Finished interpolation of second fit parameter space!\n")
 
+        if self.norm:
+            print("NOTE: Actual values are being normalized, plot is showing non-normalized values!!")
+
         if plot:
             self._plot_2d(
                 x1_label=self.input1_label, x2_label=self.input2_label,
                 z_label1=self.fit1_label, z_label2=self.fit2_label
             )
-    def _optimize(self, guess: NDArray, target: NDArray, show_message: bool = False, **kwargs) -> OptimizeResult:
+
+    def _optimize(
+            self, guess: NDArray, target: NDArray, f0_tol: float, show_message: bool = False
+        ) -> OptimizeResult:
         """
         Handles low-level optimization logic. RAISES ON NON-CONVERGENCE. kwargs are passed
         the multi-objective optimization function.
         """
+        # Fix target and f0 tolerance if using normalization
+        if self.norm:
+            target[0] = target[0] / self.fit1_norm
+            target[1] = target[1] / self.fit2_norm
+            f0_tol = f0_tol / self.fit1_norm
+        
+        # Define the objective function for Qc
+        qc_opt_fn = lambda xs: np.abs(self.f2_objective(*xs) - target[1])
+
+        # Define the constraint function on resonant frequency and constraint object
+        # in format necessary for the optimizer
+        f0_constraint_fn = lambda xs: f0_tol - np.abs(self.f1_objective(*xs) - target[0])
+        constraints = {'type': 'ineq', 'fun': f0_constraint_fn}
+
         opt_result = minimize(
-            fun = partial(self._multi_objective_dist_function, y1=target[0], y2=target[1], **kwargs),
-            x0 = guess,
-            method = 'L-BFGS-B',
-            bounds = self.bounds
+            fun=qc_opt_fn,
+            x0=guess,
+            method='SLSQP',
+            constraints=constraints,
+            bounds=self.bounds,
+            options={'maxiter': 10000}
         )
         if opt_result.success:
             return opt_result
 
         else:
-            err_message = f"Optimization for target ({target[0]:.{PP}f}, {target[1]:.{PP}f}) failed"
+            err_message = f"Optimization for target ({target[0] * self.fit1_norm:.{PP}f}, {target[1] * self.fit2_norm:.{PP}f}) failed"
             if show_message:
                 raise OptimizationError(err_message + f': {opt_result.message}')
             else:
@@ -228,8 +261,8 @@ class ResOptimizer:
 
 
     def optimize(
-        self, target: NDArray, guess: NDArray | None = None, x1_weight: float = 10.0,
-        x2_weight: float = 1.0, show_message: bool = False
+        self, target: NDArray, f0_tol: float, guess: NDArray | None = None,
+        show_message: bool = False
     ) -> tuple[NDArray, NDArray]:
         """
         Performs constrained, multi-objective optimization for a given target.
@@ -242,7 +275,7 @@ class ResOptimizer:
             self.bounds = self._find_bounds()
             print(f"Bounds found: x1: {self.bounds[0]}, x2: {self.bounds[1]}\n")
 
-        print(f"Starting optimization for target: ({target[0]:.{PP}f}, {target[1]:.{PP}f})...")
+        print(f"Starting optimization for target: ({target[0] * self.fit1_norm:.{PP}f}, {target[1] * self.fit2_norm:.{PP}f})...")
         if guess is None:
             print("Finding best initial guess(s) from input space...")
             guess = self._find_guess(target=target)
@@ -253,12 +286,11 @@ class ResOptimizer:
                 print(f'Found multiple degenerate guesses.')
                 dlist = []
                 for g in guess:
-                    print(f'\tOptimizing with guess: ({g[0]:.{PP}f}, {g[1]:.{PP}f})...')
+                    print(f'\tOptimizing with guess: ({g[0] * self.fit1_norm:.{PP}f}, {g[1] * self.fit2_norm:.{PP}f})...')
                     opt_res = self._optimize(
-                        guess=g, target=target,
+                        guess=g, target=target, f0_tol=f0_tol,
                         show_message=show_message,
-                        x1_weight=x1_weight, x2_weight=x2_weight
-                        )
+                    )
                     dlist.append((opt_res.fun, opt_res.x, g))
                     print(f'\tOptimization successful for guess: ({g[0]:.{PP}f}, {g[1]:.{PP}f}).')
                     print(f'\tDistance: {opt_res.fun}\n')
@@ -266,40 +298,20 @@ class ResOptimizer:
                 # Sort on distance value
                 dlist.sort(key=lambda x: x[0])
                 best_guess = dlist[0]
-                print(f'Lowest distance {best_guess[0]:.{PP}f} with guess ({best_guess[2][0]:.{PP}f}, {best_guess[2][1]}:.{PP}f)')
+                print(f'Lowest distance {best_guess[0]:.{PP}f} with guess: ({best_guess[2][0] * self.fit1_norm:.{PP}f}, {best_guess[2][1] * self.fit2_norm}:.{PP}f)')
             else:
-                print(f"Found guess: ({guess[0, 0]:.{PP}f}, {guess[0, 1]:.{PP}f})\n")
+                print(f"Found guess: ({guess[0, 0] * self.fit1_norm:.{PP}f}, {guess[0, 1] * self.fit2_norm:.{PP}f})\n")
                 opt_res = self._optimize(
-                    guess=guess.flatten(), target=target,
+                    guess=guess.flatten(), target=target, f0_tol=f0_tol,
                     show_message=show_message,
-                    x1_weight=x1_weight, x2_weight=x2_weight
                 )
                 best_guess = (opt_res.fun, opt_res.x, guess)
 
-            print(f"Optimization successful for target: ({target[0]:.{PP}f}, {target[1]:.{PP}f})")
-            print(f"\tInterp soln: ({self.f1_objective(best_guess[1])[0]:.{PP}f}, {self.f2_objective(best_guess[1])[0]:.{PP}})")
+            print(f"Optimization successful for target: ({target[0] * self.fit1_norm:.{PP}f}, {target[1] * self.fit2_norm:.{PP}f})")
+            print(f"\tInterp soln: ({self.f1_objective(best_guess[1])[0] * self.fit1_norm:.{PP}f}, {self.f2_objective(best_guess[1])[0] * self.fit2_norm:.{PP}})")
             print(f"\tInput params: ({best_guess[1][0]:.{PP}f}, {best_guess[1][1]:.{PP}f})\n\n")
-            return (target, best_guess[1])
-              
+            return tuple(target * np.array((self.fit1_norm, self.fit2_norm))), tuple(best_guess[1])
 
-    def _multi_objective_dist_function(
-            self, xs: NDArray, y1: float, y2: float,
-            x1_weight: float, x2_weight: float
-    ) -> float:
-        """
-        The multi-objective function that will be optimized over. This
-        function minimizes the Euclidean distance between the target fit value
-        pair and a point on the Pareto optimization front. Raises if interpolation
-        has not been performed.
-        """
-        if self.f1_objective is None or self.f2_objective is None:
-            raise OptimizationError("Interpolation is incomplete. Run `interpolate()` before optimizing.")
-        
-        return np.sqrt(
-            x1_weight * np.square(self.f1_objective((xs[0], xs[1])) - y1) +
-            x2_weight * np.square(self.f2_objective((xs[0], xs[1])) - y2)
-        )
-        
     def _plot_2d(
             self, x1_label: str, x2_label: str,
             z_label1: str, z_label2: str,
@@ -329,14 +341,14 @@ class ResOptimizer:
         fig, axes = plt.subplots(1, 2, figsize=figsize)  # 1 row, 2 columns
 
         # Plot the first function
-        contour1 = axes[0].contourf(X1, X2, self.f1_objective(X1, X2), cmap='viridis')
+        contour1 = axes[0].contourf(X1, X2, self.f1_objective(X1, X2) * self.fit1_norm, cmap='viridis')
         fig.colorbar(contour1, ax=axes[0], label=z_label1)
         axes[0].set_title(title[0])
         axes[0].set_xlabel(x1_label)
         axes[0].set_ylabel(x2_label)
 
         # Plot the second function
-        contour2 = axes[1].contourf(X1, X2, self.f2_objective(X1, X2), cmap='viridis')
+        contour2 = axes[1].contourf(X1, X2, self.f2_objective(X1, X2) * self.fit2_norm, cmap='viridis')
         fig.colorbar(contour2, ax=axes[1], label=z_label2)
         axes[1].set_title(title[1])
         axes[1].set_xlabel(x1_label)
