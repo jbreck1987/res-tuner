@@ -253,7 +253,7 @@ class ResOptimizer:
             )
 
     def _optimize(
-            self, guess: NDArray, target: NDArray, f0_tol: float, show_message: bool = False
+        self, guess: NDArray, target: NDArray, f0_tol: float, show_message: bool = False
     ) -> OptimizeResult:
         """
         Handles low-level optimization logic. RAISES ON NON-CONVERGENCE. kwargs are passed
@@ -301,7 +301,6 @@ class ResOptimizer:
     ) -> ResOptResult:
         """
         Performs constrained, multi-objective optimization for a given target.
-        Returns ([target_fit_val1, target_fit_val2], [optimized_tunable_val1, optimized_tunable_val2]).
         If guess is None, will find an appropriate guess(es) from the input space (I.E. Coordinate(s)
         that have a fit value pair close to the target). WILL RAISE IF OPTIMIZATION IS UNSUCCESFUL.
         """
