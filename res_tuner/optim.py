@@ -33,11 +33,13 @@ class IQResult:
     Simple class to hold the results of an IQ loop fit.
     
     @params
-    -tunables: NDArray of the tunable values used in the simulation.
-    -fit_values: dict with the fit results of the given parameter
+    -tunables: NDArray of the tunable values used in the sim instance
+    -fit_values: dict with the fit results of the given parameter(s) for sim instance
+    -path: pathlib Path object to the file used in the sim instance
     """
     tunables: NDArray | None = None
     fit_values: dict | None = None
+    path: Path | None = None
 
 
 class SimFilenameParser:
@@ -115,7 +117,7 @@ class FitIQ:
         phase0_fix: float = 0,
         phase1_fix: float = 0,
         fit_params: str | tuple[str] = ('f0', 'qc')
-    ) -> IQResult | None:
+    ) -> tuple[IQResult] | None:
         """
         Loads the touchstone files and performes the fit on each
         """
@@ -167,7 +169,8 @@ class FitIQ:
             self.res.append(
                 IQResult(
                     tunables=np.array(geom_var, dtype=np.float64),
-                    fit_values={p: result[p] for p in fit_params}
+                    fit_values={p: result[p] for p in fit_params},
+                    path=path
                 )
             )
         
